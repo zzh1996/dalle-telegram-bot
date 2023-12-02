@@ -7,3 +7,4 @@ __pycache__
 *.session
 .ipynb_checkpoints/
 temp/
+images/

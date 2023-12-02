@@ -5,7 +5,7 @@ import shelve
 import time
 import traceback
 import html
-import tempfile
+import time
 import aiohttp
 from collections import defaultdict
 import openai
@@ -253,6 +253,11 @@ Size:
 --square (default): 1024x1024
 -w --wide: 1792x1024
 -t --tall: 1024x1792
+
+Example:
+/dalle -h -n A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
 """
 
 @only_whitelist
@@ -268,8 +273,9 @@ async def dalle(message):
     style = None
     size = None
     error = None
+    is_options = True
     for param in params[1:]:
-        if param.startswith('-'):
+        if param.startswith('-') and is_options:
             if param in ['-s', '--standard']:
                 if quality is None:
                     quality = 'standard'
@@ -309,6 +315,7 @@ async def dalle(message):
                 error = f'Unknown option: {param}'
         else:
             prompt.append(param)
+            is_options = False
     if quality is None:
         quality = 'standard'
     if style is None:
@@ -329,25 +336,36 @@ async def dalle(message):
         quality=quality,
         style=style,
     )
-    logging.info('Using DALL-E 3 API: %s', params)
-    try:
-        result = await aclient.images.generate(**params)
-        url = result.data[0].url
-        revised_prompt = result.data[0].revised_prompt
-        caption = f'<a href="{url}">Download</a>\n{html.escape(revised_prompt)}'
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
-            async with session.get(url) as response:
-                response.raise_for_status()
-                image = await response.read()
-        with tempfile.NamedTemporaryFile(suffix='.png') as f:
-            f.write(image)
-            f.seek(0)
-            await send_photo(chat_id, caption, msg_id, f)
+    logging.info('Using DALL-E 3 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    async with bot.action(chat_id, 'typing'):
+        try:
+            result = await aclient.images.generate(**params)
+            logging.info('Responce: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
+            url = result.data[0].url
+            revised_prompt = result.data[0].revised_prompt
+            download_link = f'<a href="{url}">Download</a>'
+            caption = f'{download_link}\n{html.escape(revised_prompt)}'
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    image = await response.read()
 
-    except Exception as e:
-        logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
-        await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
-        return
+            dirname = f'images/{chat_id}'.replace('-', '_')
+            filename = f'{int(time.time())}_{msg_id}.png'
+            path = f'{dirname}/{filename}'
+            os.makedirs(dirname, exist_ok=True)
+            with open(path, 'w+b') as f:
+                f.write(image)
+            try:
+                await send_photo(chat_id, caption, msg_id, path)
+            except errors.rpcerrorlist.MediaCaptionTooLongError:
+                photo_msg_id = await send_photo(chat_id, download_link, msg_id, path)
+                await send_message(chat_id, revised_prompt, photo_msg_id)
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
 
 async def ping(message):
     await send_message(message.chat_id, f'chat_id={message.chat_id} user_id={message.sender_id} is_whitelisted={is_whitelist(message.chat_id)}', message.id)
