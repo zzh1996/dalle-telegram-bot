@@ -8,3 +8,6 @@ __pycache__
 .ipynb_checkpoints/
 temp/
 images/
+docker-compose-prod.yml
+db.db
+bot.session-journal

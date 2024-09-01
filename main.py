@@ -9,6 +9,7 @@ import time
 import aiohttp
 from collections import defaultdict
 import openai
+import fal_client
 from telethon import TelegramClient, events, errors, functions, types
 
 ADMIN_ID = 71863318
@@ -239,7 +240,7 @@ class BotReplyMessages:
     async def finalize(self):
         await self._force_update(self.text)
 
-usage = """Usage: /dalle [OPTIONS] PROMPT
+dalle_usage = """Usage: /dalle [OPTIONS] PROMPT
 
 Quality:
 -s --standard (default)
@@ -326,7 +327,7 @@ async def dalle(message):
     if not prompt:
         error = 'Prompt is empty'
     if error is not None:
-        await send_message(chat_id, f'[!] Error: {error}\n\n{usage}', msg_id)
+        await send_message(chat_id, f'[!] Error: {error}\n\n{dalle_usage}', msg_id)
         return
 
     params = dict(
@@ -342,7 +343,7 @@ async def dalle(message):
             result = await aclient.images.generate(**params)
             logging.info('Responce: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
             url = result.data[0].url
-            revised_prompt = result.data[0].revised_prompt
+            revised_prompt = f"[dall-e-3] {result.data[0].revised_prompt}"
             download_link = f'<a href="{url}">Download</a>'
             caption = f'{download_link}\n{html.escape(revised_prompt)}'
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
@@ -352,6 +353,154 @@ async def dalle(message):
 
             dirname = f'images/{chat_id}'.replace('-', '_')
             filename = f'{int(time.time())}_{msg_id}.png'
+            path = f'{dirname}/{filename}'
+            os.makedirs(dirname, exist_ok=True)
+            with open(path, 'w+b') as f:
+                f.write(image)
+            try:
+                await send_photo(chat_id, caption, msg_id, path)
+            except errors.rpcerrorlist.MediaCaptionTooLongError:
+                photo_msg_id = await send_photo(chat_id, download_link, msg_id, path)
+                await send_message(chat_id, revised_prompt, photo_msg_id)
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
+flux_usage = """Usage: /flux [OPTIONS] PROMPT
+
+PROMPT must be English only.
+
+Model:
+--pro (default): FLUX.1 pro
+--dev: FLUX.1 dev
+
+Size:
+--landscape-4-3 (default)
+--square-hd
+--square
+--portrait-4-3
+--portrait-16-9
+--landscape-16-9
+
+Example:
+/flux --square-hd A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
+"""
+
+@only_whitelist
+async def flux(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+    params = text.split()
+    prompt = []
+    size = None
+    model = None
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            if param in ['--landscape-4-3']:
+                if size is None:
+                    size = 'landscape_4_3'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--square-hd']:
+                if size is None:
+                    size = 'square_hd'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--square']:
+                if size is None:
+                    size = 'square'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-4-3']:
+                if size is None:
+                    size = 'portrait_4_3'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-16-9']:
+                if size is None:
+                    size = 'portrait_16_9'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--landscape-16-9']:
+                if size is None:
+                    size = 'landscape_16_9'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--pro']:
+                if model is None:
+                    model = 'fal-ai/flux-pro'
+                else:
+                    error = 'More than one Model options found'
+            elif param in ['--dev']:
+                if model is None:
+                    model = 'fal-ai/flux/dev'
+                else:
+                    error = 'More than one Model options found'
+            else:
+                error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    if size is None:
+        size = 'landscape_4_3'
+    if model is None:
+        model = 'fal-ai/flux-pro'
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if any(ord(c) > 127 for c in prompt):
+        error = 'Prompt is not English only'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{flux_usage}', msg_id)
+        return
+
+    params = dict(
+        prompt=prompt,
+        image_size=size,
+    )
+    if model == 'fal-ai/flux-pro':
+        params['safety_tolerance'] = 6
+    elif model == 'fal-ai/flux/dev':
+        params['enable_safety_checker'] = False
+
+    logging.info('Using FLUX API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    async with bot.action(chat_id, 'typing'):
+        try:
+            handler = await fal_client.submit_async(
+                model,
+                arguments=params,
+            )
+
+            log_index = 0
+            async for event in handler.iter_events(with_logs=True):
+                if isinstance(event, fal_client.InProgress):
+                    new_logs = event.logs[log_index:]
+                    for log in new_logs:
+                        logging.info('FLUX API LOG: %s', log["message"])
+                    log_index = len(event.logs)
+
+            result = await handler.get()
+            logging.info('Responce: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
+            url = result['images'][0]['url']
+            revised_prompt = f"[{model}] {result['prompt']}"
+            download_link = f'<a href="{url}">Download</a>'
+            caption = f'{download_link}\n{html.escape(revised_prompt)}'
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    image = await response.read()
+
+            dirname = f'images/{chat_id}'.replace('-', '_')
+            filename = f'FLUX_{int(time.time())}_{msg_id}.png'
             path = f'{dirname}/{filename}'
             os.makedirs(dirname, exist_ok=True)
             with open(path, 'w+b') as f:
@@ -408,6 +557,9 @@ async def main():
                 elif text == '/dalle' or text.startswith('/dalle ') or \
                     text == f'/dalle@{me.username}' or text.startswith(f'/dalle@{me.username} '):
                     await dalle(event.message)
+                elif text == '/flux' or text.startswith('/flux ') or \
+                    text == f'/flux@{me.username}' or text.startswith(f'/flux@{me.username} '):
+                    await flux(event.message)
                 elif text == '/add_whitelist' or text == f'/add_whitelist@{me.username}':
                     await add_whitelist_handler(event.message)
                 elif text == '/del_whitelist' or text == f'/del_whitelist@{me.username}':
@@ -422,7 +574,8 @@ async def main():
                     ('add_whitelist', 'Add this group to whitelist (only admin)'),
                     ('del_whitelist', 'Delete this group from whitelist (only admin)'),
                     ('get_whitelist', 'List groups in whitelist (only admin)'),
-                    ('dalle', 'Creates an image given a prompt')
+                    ('dalle', 'Creates an image given a prompt via DALL-E'),
+                    ('flux', 'Creates an image given a prompt via FLUX.1'),
                 ]]
             ))
             await bot.run_until_disconnected()
