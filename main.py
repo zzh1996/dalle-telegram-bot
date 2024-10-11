@@ -373,7 +373,8 @@ flux_usage = """Usage: /flux [OPTIONS] PROMPT
 PROMPT must be English only.
 
 Model:
---pro (default): FLUX.1 pro
+--pro (default): FLUX1.1 pro
+--pro1: FLUX.1 pro
 --dev: FLUX.1 dev
 
 Size:
@@ -437,6 +438,11 @@ async def flux(message):
                     error = 'More than one Size options found'
             elif param in ['--pro']:
                 if model is None:
+                    model = 'fal-ai/flux-pro/v1.1'
+                else:
+                    error = 'More than one Model options found'
+            elif param in ['--pro1']:
+                if model is None:
                     model = 'fal-ai/flux-pro'
                 else:
                     error = 'More than one Model options found'
@@ -453,7 +459,7 @@ async def flux(message):
     if size is None:
         size = 'landscape_4_3'
     if model is None:
-        model = 'fal-ai/flux-pro'
+        model = 'fal-ai/flux-pro/v1.1'
     prompt = ' '.join(prompt)
     if not prompt:
         error = 'Prompt is empty'
@@ -470,6 +476,9 @@ async def flux(message):
     if model == 'fal-ai/flux-pro':
         params['safety_tolerance'] = 6
     elif model == 'fal-ai/flux/dev':
+        params['enable_safety_checker'] = False
+    elif model == 'fal-ai/flux-pro/v1.1':
+        params['safety_tolerance'] = 6
         params['enable_safety_checker'] = False
 
     logging.info('Using FLUX API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
