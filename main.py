@@ -6,6 +6,7 @@ import time
 import traceback
 import html
 import time
+import base64
 import aiohttp
 from collections import defaultdict
 import openai
@@ -17,7 +18,7 @@ ADMIN_ID = 71863318
 aclient = openai.AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
     max_retries=0,
-    timeout=120,
+    timeout=600,
 )
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID"))
@@ -341,7 +342,7 @@ async def dalle(message):
     async with bot.action(chat_id, 'typing'):
         try:
             result = await aclient.images.generate(**params)
-            logging.info('Responce: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
             url = result.data[0].url
             revised_prompt = f"[dall-e-3] {result.data[0].revised_prompt}"
             download_link = f'<a href="{url}">Download</a>'
@@ -362,6 +363,154 @@ async def dalle(message):
             except errors.rpcerrorlist.MediaCaptionTooLongError:
                 photo_msg_id = await send_photo(chat_id, download_link, msg_id, path)
                 await send_message(chat_id, revised_prompt, photo_msg_id)
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
+gpti_usage = """Usage: /gpti [OPTIONS] PROMPT
+
+Quality:
+-h --high (default): high
+-m --medium: medium
+-l --low: low
+
+Size:
+default: auto
+-s --square: 1024x1024
+-w --landscape: 1536x1024
+-p --portrait: 1024x1536
+
+Background:
+default: auto
+-t --transparent: transparent
+-o --opaque: opaque
+
+Example:
+/gpti -h -s -o A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
+"""
+
+@only_whitelist
+async def gpti(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+    params = text.split()
+    prompt = []
+    quality = None
+    size = None
+    background = None
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            if param in ['-h', '--high']:
+                if quality is None:
+                    quality = 'high'
+                else:
+                    error = 'More than one Quality options found'
+            elif param in ['-m', '--medium']:
+                if quality is None:
+                    quality = 'medium'
+                else:
+                    error = 'More than one Quality options found'
+            elif param in ['-l', '--low']:
+                if quality is None:
+                    quality = 'low'
+                else:
+                    error = 'More than one Quality options found'
+            elif param in ['-s', '--square']:
+                if size is None:
+                    size = '1024x1024'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-w', '--landscape']:
+                if size is None:
+                    size = '1536x1024'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-p', '--portrait']:
+                if size is None:
+                    size = '1024x1536'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-t', '--transparent']:
+                if background is None:
+                    background = 'transparent'
+                else:
+                    error = 'More than one Background options found'
+            elif param in ['-o', '--opaque']:
+                if background is None:
+                    background = 'opaque'
+                else:
+                    error = 'More than one Background options found'
+            else:
+                error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    if quality is None:
+        quality = 'high'
+    if size is None:
+        size = 'auto'
+    if background is None:
+        background = 'auto'
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{gpti_usage}', msg_id)
+        return
+
+    params = dict(
+        model='gpt-image-1',
+        prompt=prompt,
+        background=background,
+        moderation='low',
+        quality=quality,
+        size=size,
+    )
+    logging.info('Using gpt-image-1 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    def remove_blob(result):
+        result_ = result.model_copy(deep=True)
+        if hasattr(result_, 'data'):
+            for item in result_.data:
+                if hasattr(item, 'b64_json'):
+                    item.b64_json = '...'
+        return result_
+    async with bot.action(chat_id, 'typing'):
+        try:
+            result = await aclient.images.generate(**params)
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, remove_blob(result))
+            image_bytes = base64.b64decode(result.data[0].b64_json)
+            input_tokens = result.usage.input_tokens
+            image_tokens = result.usage.input_tokens_details.image_tokens
+            text_tokens = result.usage.input_tokens_details.text_tokens
+            output_tokens = result.usage.output_tokens
+            cost = 5e-6 * text_tokens + 10e-6 * image_tokens + 40e-6 * output_tokens
+            usage_text = '[gpt-image-1]\n'
+            if input_tokens:
+                usage_text += f'Input tokens: {input_tokens}\n'
+            if image_tokens:
+                usage_text += f'Image tokens: {image_tokens}\n'
+            if text_tokens:
+                usage_text += f'Text tokens: {text_tokens}\n'
+            if output_tokens:
+                usage_text += f'Output tokens: {output_tokens}\n'
+            if cost:
+                usage_text += f'Cost: ${cost:.2f}\n'
+            dirname = f'images/{chat_id}'.replace('-', '_')
+            filename = f'GPT_{int(time.time())}_{msg_id}.png'
+            path = f'{dirname}/{filename}'
+            os.makedirs(dirname, exist_ok=True)
+            with open(path, 'w+b') as f:
+                f.write(image_bytes)
+            await send_photo(chat_id, usage_text, msg_id, path)
 
         except Exception as e:
             logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
@@ -498,7 +647,7 @@ async def flux(message):
                     log_index = len(event.logs)
 
             result = await handler.get()
-            logging.info('Responce: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
             url = result['images'][0]['url']
             revised_prompt = f"[{model}] {result['prompt']}"
             download_link = f'<a href="{url}">Download</a>'
@@ -566,6 +715,9 @@ async def main():
                 elif text == '/dalle' or text.startswith('/dalle ') or \
                     text == f'/dalle@{me.username}' or text.startswith(f'/dalle@{me.username} '):
                     await dalle(event.message)
+                elif text == '/gpti' or text.startswith('/gpti ') or \
+                    text == f'/gpti@{me.username}' or text.startswith(f'/gpti@{me.username} '):
+                    await gpti(event.message)
                 elif text == '/flux' or text.startswith('/flux ') or \
                     text == f'/flux@{me.username}' or text.startswith(f'/flux@{me.username} '):
                     await flux(event.message)
@@ -584,6 +736,7 @@ async def main():
                     ('del_whitelist', 'Delete this group from whitelist (only admin)'),
                     ('get_whitelist', 'List groups in whitelist (only admin)'),
                     ('dalle', 'Creates an image given a prompt via DALL-E'),
+                    ('gpti', 'Creates an image given a prompt via gpt-image-1'),
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
                 ]]
             ))
