@@ -9,5 +9,6 @@ __pycache__
 temp/
 images/
 docker-compose-prod.yml
+photos/
 db.db
 bot.session-journal

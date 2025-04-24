@@ -7,6 +7,8 @@ import traceback
 import html
 import time
 import base64
+import hashlib
+import contextlib
 import aiohttp
 from collections import defaultdict
 import openai
@@ -241,6 +243,21 @@ class BotReplyMessages:
     async def finalize(self):
         await self._force_update(self.text)
 
+def save_photo(photo_blob):
+    h = hashlib.sha256(photo_blob).hexdigest()
+    dir = f'photos/{h[:2]}/{h[2:4]}'
+    path = f'{dir}/{h}.png'
+    if not os.path.isfile(path):
+        os.makedirs(dir, exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(photo_blob)
+    return h
+
+def load_photo_filename(h):
+    dir = f'photos/{h[:2]}/{h[2:4]}'
+    path = f'{dir}/{h}.png'
+    return path
+
 dalle_usage = """Usage: /dalle [OPTIONS] PROMPT
 
 Quality:
@@ -400,6 +417,38 @@ async def gpti(message):
     msg_id = message.id
     text = message.message
     logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+
+    photo_message = None
+    if message.is_reply:
+        reply_to_message = await message.get_reply_message()
+        if reply_to_message.photo is not None:
+            photo_message = reply_to_message
+    if message.photo is not None:
+        photo_message = message
+    photo_blobs = []
+    if photo_message is not None:
+        photo_blobs = [await photo_message.download_media(bytes)]
+        if photo_message.grouped_id is not None:
+            await send_message(chat_id, f'[!] Error: Grouped photos are not yet supported', msg_id)
+            return
+            # await asyncio.sleep(1)
+            # async for msg in bot.iter_messages(chat_id, max_id=msg_id - 1, reverse=True):
+            #     if msg.grouped_id == photo_message.grouped_id:
+            #         photo_blobs = [await msg.download_media(bytes)] + photo_blobs
+            #     else:
+            #         break
+            # async for msg in bot.iter_messages(chat_id, min_id=msg_id + 1):
+            #     if msg.grouped_id == photo_message.grouped_id:
+            #         photo_blobs.append(await msg.download_media(bytes))
+            #     else:
+            #         break
+
+    photo_hashes = []
+    if photo_blobs:
+        for photo_blob in photo_blobs:
+            photo_hashes.append(save_photo(photo_blob))
+        logging.info('Photos: chat_id=%r, sender_id=%r, msg_id=%r, photos(%r)=%r', chat_id, sender_id, msg_id, len(photo_hashes), photo_hashes)
+
     params = text.split()
     prompt = []
     quality = None
@@ -458,6 +507,8 @@ async def gpti(message):
         quality = 'high'
     if size is None:
         size = 'auto'
+    if photo_blobs and background is not None:
+        error = 'Background is not supported when editing photos'
     if background is None:
         background = 'auto'
     prompt = ' '.join(prompt)
@@ -485,7 +536,15 @@ async def gpti(message):
         return result_
     async with bot.action(chat_id, 'typing'):
         try:
-            result = await aclient.images.generate(**params)
+            if photo_hashes:
+                with contextlib.ExitStack() as stack:
+                    files = [stack.enter_context(open(load_photo_filename(h), 'rb')) for h in photo_hashes]
+                    params['image'] = files
+                    del params['background']
+                    del params['moderation']
+                    result = await aclient.images.edit(**params)
+            else:
+                result = await aclient.images.generate(**params)
             logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, remove_blob(result))
             image_bytes = base64.b64decode(result.data[0].b64_json)
             input_tokens = result.usage.input_tokens
@@ -494,6 +553,8 @@ async def gpti(message):
             output_tokens = result.usage.output_tokens
             cost = 5e-6 * text_tokens + 10e-6 * image_tokens + 40e-6 * output_tokens
             usage_text = '[gpt-image-1]\n'
+            if photo_hashes:
+                usage_text += f'Input images: {len(photo_hashes)}\n'
             if input_tokens:
                 usage_text += f'Input tokens: {input_tokens}\n'
             if image_tokens:

@@ -8,6 +8,8 @@ services:
         command: python main.py
         working_dir: /bot
         restart: always
+        stdin_open: true
+        tty: true
         init: true
         environment:
           - OPENAI_API_KEY=
