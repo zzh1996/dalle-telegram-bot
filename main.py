@@ -13,6 +13,7 @@ import aiohttp
 from collections import defaultdict
 import openai
 import fal_client
+from google import genai
 from telethon import TelegramClient, events, errors, functions, types
 
 ADMIN_ID = 71863318
@@ -729,6 +730,136 @@ async def flux(message):
             await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
             return
 
+imagen_usage = """Usage: /imagen [OPTIONS] PROMPT
+
+Model:
+--ultra (default): Imagen 4 Ultra
+--standard: Imagen 4
+
+Size:
+--square (default)
+--landscape-4-3
+--portrait-4-3
+--portrait-16-9
+--landscape-16-9
+
+Example:
+/imagen A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
+"""
+
+@only_whitelist
+async def imagen(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+    params = text.split()
+    prompt = []
+    size = None
+    model = None
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            if param in ['--landscape-4-3']:
+                if size is None:
+                    size = '4:3'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--square']:
+                if size is None:
+                    size = '1:1'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-4-3']:
+                if size is None:
+                    size = '3:4'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-16-9']:
+                if size is None:
+                    size = '9:16'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--landscape-16-9']:
+                if size is None:
+                    size = '16:9'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--ultra']:
+                if model is None:
+                    model = 'models/imagen-4.0-ultra-generate-preview-06-06'
+                else:
+                    error = 'More than one Model options found'
+            elif param in ['--standard']:
+                if model is None:
+                    model = 'models/imagen-4.0-generate-preview-06-06'
+                else:
+                    error = 'More than one Model options found'
+            else:
+                error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    if size is None:
+        size = '1:1'
+    if model is None:
+        model = 'models/imagen-4.0-ultra-generate-preview-06-06'
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{imagen_usage}', msg_id)
+        return
+
+    params = dict(
+        model=model,
+        prompt=prompt,
+        config=dict(
+            number_of_images=1,
+            person_generation="ALLOW_ADULT",
+            aspect_ratio=size,
+        ),
+    )
+    logging.info('Using Imagen API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    async with bot.action(chat_id, 'typing'):
+        try:
+            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            result = client.models.generate_images(**params)
+            def remove_response_blobs(response):
+                if response.generated_images is not None and len(response.generated_images) == 1:
+                    obj = response.generated_images[0]
+                    if obj.image is not None and obj.image.image_bytes is not None:
+                            response_new = response.model_copy(deep=True)
+                            response_new.generated_images[0].image.image_bytes = b'...'
+                            return response_new
+                return response
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, remove_response_blobs(result))
+            if result.generated_images is None or len(result.generated_images) != 1:
+                raise ValueError('No generated images found in response')
+            image = result.generated_images[0].image.image_bytes
+            prompt = f'[{model}] {prompt}'
+            caption = f'{html.escape(prompt)}'
+            dirname = f'images/{chat_id}'.replace('-', '_')
+            filename = f'IMAGEN_{int(time.time())}_{msg_id}.png'
+            path = f'{dirname}/{filename}'
+            os.makedirs(dirname, exist_ok=True)
+            with open(path, 'w+b') as f:
+                f.write(image)
+            try:
+                await send_photo(chat_id, caption, msg_id, path)
+            except errors.rpcerrorlist.MediaCaptionTooLongError:
+                photo_msg_id = await send_photo(chat_id, '', msg_id, path)
+                await send_message(chat_id, prompt, photo_msg_id)
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
 async def ping(message):
     await send_message(message.chat_id, f'chat_id={message.chat_id} user_id={message.sender_id} is_whitelisted={is_whitelist(message.chat_id)}', message.id)
 
@@ -779,6 +910,9 @@ async def main():
                 elif text == '/flux' or text.startswith('/flux ') or \
                     text == f'/flux@{me.username}' or text.startswith(f'/flux@{me.username} '):
                     await flux(event.message)
+                elif text == '/imagen' or text.startswith('/imagen ') or \
+                    text == f'/imagen@{me.username}' or text.startswith(f'/imagen@{me.username} '):
+                    await imagen(event.message)
                 elif text == '/add_whitelist' or text == f'/add_whitelist@{me.username}':
                     await add_whitelist_handler(event.message)
                 elif text == '/del_whitelist' or text == f'/del_whitelist@{me.username}':
@@ -796,6 +930,7 @@ async def main():
                     ('dalle', 'Creates an image given a prompt via DALL-E'),
                     ('gpti', 'Creates an image given a prompt via gpt-image-1'),
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
+                    ('imagen', 'Creates an image given a prompt via Imagen'),
                 ]]
             ))
             await bot.run_until_disconnected()
