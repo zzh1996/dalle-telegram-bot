@@ -15,6 +15,7 @@ services:
           - OPENAI_API_KEY=
           - FAL_KEY=
           - GEMINI_API_KEY=
+          - REPLICATE_API_TOKEN=
           - TELEGRAM_BOT_TOKEN=
           - TELEGRAM_API_ID=
           - TELEGRAM_API_HASH=

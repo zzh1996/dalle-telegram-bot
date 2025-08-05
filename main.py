@@ -14,6 +14,7 @@ from collections import defaultdict
 import openai
 import fal_client
 from google import genai
+import replicate
 from telethon import TelegramClient, events, errors, functions, types
 
 ADMIN_ID = 71863318
@@ -734,14 +735,17 @@ qwen_usage = """Usage: /qwen [OPTIONS] PROMPT
 
 Size:
 --landscape-4-3 (default)
---square-hd
 --square
 --portrait-4-3
 --portrait-16-9
 --landscape-16-9
 
+Options:
+--fast: Run faster predictions with additional optimizations
+--enhance: Enhance the prompt with positive magic
+
 Example:
-/qwen --square-hd A cute cat
+/qwen --square A cute cat
 
 Note: All OPTIONS should appear before the PROMPT.
 """
@@ -757,49 +761,50 @@ async def qwen(message):
     prompt = []
     size = None
     model = None
+    use_fast = False
+    use_enhance = False
     error = None
     is_options = True
     for param in params[1:]:
         if param.startswith('-') and is_options:
             if param in ['--landscape-4-3']:
                 if size is None:
-                    size = 'landscape_4_3'
-                else:
-                    error = 'More than one Size options found'
-            elif param in ['--square-hd']:
-                if size is None:
-                    size = 'square_hd'
+                    size = '4:3'
                 else:
                     error = 'More than one Size options found'
             elif param in ['--square']:
                 if size is None:
-                    size = 'square'
+                    size = '1:1'
                 else:
                     error = 'More than one Size options found'
             elif param in ['--portrait-4-3']:
                 if size is None:
-                    size = 'portrait_4_3'
+                    size = '3:4'
                 else:
                     error = 'More than one Size options found'
             elif param in ['--portrait-16-9']:
                 if size is None:
-                    size = 'portrait_16_9'
+                    size = '9:16'
                 else:
                     error = 'More than one Size options found'
             elif param in ['--landscape-16-9']:
                 if size is None:
-                    size = 'landscape_16_9'
+                    size = '16:9'
                 else:
                     error = 'More than one Size options found'
+            elif param in ['--fast']:
+                use_fast = True
+            elif param in ['--enhance']:
+                use_enhance = True
             else:
                 error = f'Unknown option: {param}'
         else:
             prompt.append(param)
             is_options = False
     if size is None:
-        size = 'landscape_4_3'
+        size = '4:3'
     if model is None:
-        model = 'fal-ai/qwen-image'
+        model = 'qwen/qwen-image'
     prompt = ' '.join(prompt)
     if not prompt:
         error = 'Prompt is empty'
@@ -809,30 +814,24 @@ async def qwen(message):
 
     params = dict(
         prompt=prompt,
-        image_size=size,
+        go_fast=use_fast,
+        aspect_ratio=size,
+        output_format='png',
+        enhance_prompt=use_enhance,
+        disable_safety_checker=True,
     )
-    params['enable_safety_checker'] = False
 
-    logging.info('Using FLUX API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    logging.info('Using Replicate API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
     async with bot.action(chat_id, 'typing'):
         try:
-            handler = await fal_client.submit_async(
-                model,
-                arguments=params,
+            result = await replicate.predictions.async_create(
+                model=model,
+                input=params,
             )
-
-            log_index = 0
-            async for event in handler.iter_events(with_logs=True):
-                if isinstance(event, fal_client.InProgress):
-                    new_logs = event.logs[log_index:]
-                    for log in new_logs:
-                        logging.info('FLUX API LOG: %s', log["message"])
-                    log_index = len(event.logs)
-
-            result = await handler.get()
+            await result.async_wait()
             logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
-            url = result['images'][0]['url']
-            revised_prompt = f"[{model}] {result['prompt']}"
+            url = result.output[0]
+            revised_prompt = f"[{model}] {prompt}"
             download_link = f'<a href="{url}">Download</a>'
             caption = f'{download_link}\n{html.escape(revised_prompt)}'
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
