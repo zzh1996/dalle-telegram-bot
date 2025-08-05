@@ -730,6 +730,133 @@ async def flux(message):
             await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
             return
 
+qwen_usage = """Usage: /qwen [OPTIONS] PROMPT
+
+Size:
+--landscape-4-3 (default)
+--square-hd
+--square
+--portrait-4-3
+--portrait-16-9
+--landscape-16-9
+
+Example:
+/qwen --square-hd A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
+"""
+
+@only_whitelist
+async def qwen(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+    params = text.split()
+    prompt = []
+    size = None
+    model = None
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            if param in ['--landscape-4-3']:
+                if size is None:
+                    size = 'landscape_4_3'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--square-hd']:
+                if size is None:
+                    size = 'square_hd'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--square']:
+                if size is None:
+                    size = 'square'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-4-3']:
+                if size is None:
+                    size = 'portrait_4_3'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--portrait-16-9']:
+                if size is None:
+                    size = 'portrait_16_9'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--landscape-16-9']:
+                if size is None:
+                    size = 'landscape_16_9'
+                else:
+                    error = 'More than one Size options found'
+            else:
+                error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    if size is None:
+        size = 'landscape_4_3'
+    if model is None:
+        model = 'fal-ai/qwen-image'
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{qwen_usage}', msg_id)
+        return
+
+    params = dict(
+        prompt=prompt,
+        image_size=size,
+    )
+    params['enable_safety_checker'] = False
+
+    logging.info('Using FLUX API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    async with bot.action(chat_id, 'typing'):
+        try:
+            handler = await fal_client.submit_async(
+                model,
+                arguments=params,
+            )
+
+            log_index = 0
+            async for event in handler.iter_events(with_logs=True):
+                if isinstance(event, fal_client.InProgress):
+                    new_logs = event.logs[log_index:]
+                    for log in new_logs:
+                        logging.info('FLUX API LOG: %s', log["message"])
+                    log_index = len(event.logs)
+
+            result = await handler.get()
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, result)
+            url = result['images'][0]['url']
+            revised_prompt = f"[{model}] {result['prompt']}"
+            download_link = f'<a href="{url}">Download</a>'
+            caption = f'{download_link}\n{html.escape(revised_prompt)}'
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    image = await response.read()
+
+            dirname = f'images/{chat_id}'.replace('-', '_')
+            filename = f'Qwen_{int(time.time())}_{msg_id}.png'
+            path = f'{dirname}/{filename}'
+            os.makedirs(dirname, exist_ok=True)
+            with open(path, 'w+b') as f:
+                f.write(image)
+            try:
+                await send_photo(chat_id, caption, msg_id, path)
+            except errors.rpcerrorlist.MediaCaptionTooLongError:
+                photo_msg_id = await send_photo(chat_id, download_link, msg_id, path)
+                await send_message(chat_id, revised_prompt, photo_msg_id)
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
 imagen_usage = """Usage: /imagen [OPTIONS] PROMPT
 
 Model:
@@ -910,6 +1037,9 @@ async def main():
                 elif text == '/flux' or text.startswith('/flux ') or \
                     text == f'/flux@{me.username}' or text.startswith(f'/flux@{me.username} '):
                     await flux(event.message)
+                elif text == '/qwen' or text.startswith('/qwen ') or \
+                    text == f'/qwen@{me.username}' or text.startswith(f'/qwen@{me.username} '):
+                    await qwen(event.message)
                 elif text == '/imagen' or text.startswith('/imagen ') or \
                     text == f'/imagen@{me.username}' or text.startswith(f'/imagen@{me.username} '):
                     await imagen(event.message)
@@ -930,6 +1060,7 @@ async def main():
                     ('dalle', 'Creates an image given a prompt via DALL-E'),
                     ('gpti', 'Creates an image given a prompt via gpt-image-1'),
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
+                    ('qwen', 'Creates an image given a prompt via qwen-image'),
                     ('imagen', 'Creates an image given a prompt via Imagen'),
                 ]]
             ))
