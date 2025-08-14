@@ -917,12 +917,12 @@ async def imagen(message):
                     error = 'More than one Size options found'
             elif param in ['--ultra']:
                 if model is None:
-                    model = 'models/imagen-4.0-ultra-generate-preview-06-06'
+                    model = 'models/imagen-4.0-ultra-generate-001'
                 else:
                     error = 'More than one Model options found'
             elif param in ['--standard']:
                 if model is None:
-                    model = 'models/imagen-4.0-generate-preview-06-06'
+                    model = 'models/imagen-4.0-generate-001'
                 else:
                     error = 'More than one Model options found'
             else:
@@ -933,7 +933,7 @@ async def imagen(message):
     if size is None:
         size = '1:1'
     if model is None:
-        model = 'models/imagen-4.0-ultra-generate-preview-06-06'
+        model = 'models/imagen-4.0-ultra-generate-001'
     prompt = ' '.join(prompt)
     if not prompt:
         error = 'Prompt is empty'
