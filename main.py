@@ -986,6 +986,114 @@ async def imagen(message):
             await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
             return
 
+seedream_usage = """Usage: /seed PROMPT
+
+Example:
+/seed A cute cat
+"""
+
+@only_whitelist
+async def seedream(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+
+    photo_message = None
+    if message.is_reply:
+        reply_to_message = await message.get_reply_message()
+        if reply_to_message.photo is not None:
+            photo_message = reply_to_message
+    if message.photo is not None:
+        photo_message = message
+    photo_blobs = []
+    if photo_message is not None:
+        if photo_message.grouped_id is not None:
+            grouped_id = photo_message.grouped_id
+            await asyncio.sleep(3)
+            if grouped_id not in albums:
+                await send_message(chat_id, f'[!] Error: Historical photo album cannot be accessed by bot. Please forward or resend.', msg_id)
+                return
+            for msg in sorted(albums[grouped_id], key=lambda m: m.id):
+                photo_blobs.append(await msg.download_media(bytes))
+        else:
+            photo_blobs = [await photo_message.download_media(bytes)]
+    photo_hashes = []
+    if photo_blobs:
+        for photo_blob in photo_blobs:
+            photo_hashes.append(save_photo(photo_blob))
+        logging.info('Photos: chat_id=%r, sender_id=%r, msg_id=%r, photos(%r)=%r', chat_id, sender_id, msg_id, len(photo_hashes), photo_hashes)
+
+    params = text.split()
+    prompt = []
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{seedream_usage}', msg_id)
+        return
+
+    params = dict(
+        model='doubao-seedream-4-0-250828',
+        prompt=prompt,
+        size='4K',
+        response_format='b64_json',
+        stream=True,
+        extra_body={
+            'watermark': False,
+            'sequential_image_generation': 'auto',
+        },
+    )
+    logging.info('Using seedream API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    def remove_blob(event):
+        event_ = event.model_copy(deep=True)
+        if hasattr(event_, 'b64_json') and event_.b64_json is not None:
+            event_.b64_json = '...'
+        return event_
+    client = openai.AsyncOpenAI(
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        api_key=os.environ.get("ARK_API_KEY"),
+    )
+    async with bot.action(chat_id, 'typing'):
+        try:
+            if photo_hashes:
+                params['extra_body']['image'] = []
+                for h in photo_hashes:
+                    with open(load_photo_filename(h), 'rb') as f:
+                        params['extra_body']['image'].append('data:image/png;base64,' + base64.b64encode(f.read()).decode())
+            stream = await client.images.generate(**params)
+            image_index = 0
+            reply_to_message_id = msg_id
+            async for event in stream:
+                logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, remove_blob(event))
+                if event is None:
+                    continue
+                elif event.type == "image_generation.partial_succeeded":
+                    if event.b64_json is not None:
+                        image_bytes = base64.b64decode(event.b64_json)
+                        dirname = f'images/{chat_id}'.replace('-', '_')
+                        filename = f'seedream_{int(time.time())}_{msg_id}_{image_index}.png'
+                        image_index += 1
+                        path = f'{dirname}/{filename}'
+                        os.makedirs(dirname, exist_ok=True)
+                        with open(path, 'w+b') as f:
+                            f.write(image_bytes)
+                        caption = f'[doubao-seedream-4-0-250828]\nimage_index={event.image_index}\nsize={event.size}'
+                        reply_to_message_id = await send_photo(chat_id, caption, reply_to_message_id, path)
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
 async def ping(message):
     await send_message(message.chat_id, f'chat_id={message.chat_id} user_id={message.sender_id} is_whitelisted={is_whitelist(message.chat_id)}', message.id)
 
@@ -1042,6 +1150,9 @@ async def main():
                 elif text == '/imagen' or text.startswith('/imagen ') or \
                     text == f'/imagen@{me.username}' or text.startswith(f'/imagen@{me.username} '):
                     await imagen(event.message)
+                elif text == '/seed' or text.startswith('/seed ') or \
+                    text == f'/seed@{me.username}' or text.startswith(f'/seed@{me.username} '):
+                    await seedream(event.message)
                 elif text == '/add_whitelist' or text == f'/add_whitelist@{me.username}':
                     await add_whitelist_handler(event.message)
                 elif text == '/del_whitelist' or text == f'/del_whitelist@{me.username}':
@@ -1061,6 +1172,7 @@ async def main():
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
                     ('qwen', 'Creates an image given a prompt via qwen-image'),
                     ('imagen', 'Creates an image given a prompt via Imagen'),
+                    ('seed', 'Creates an image given a prompt via Seedream'),
                 ]]
             ))
             await bot.run_until_disconnected()
