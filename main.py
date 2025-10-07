@@ -203,8 +203,8 @@ class BotReplyMessages:
 
     async def __aexit__(self, type, value, tb):
         await self.finalize()
-        for msg_id, _ in self.replied_msgs:
-            pending_reply_manager.remove((self.chat_id, msg_id))
+        # for msg_id, _ in self.replied_msgs:
+        #     pending_reply_manager.remove((self.chat_id, msg_id))
 
     async def _force_update(self, text):
         slices = []
@@ -229,12 +229,12 @@ class BotReplyMessages:
                     reply_to, _ = self.replied_msgs[i - 1]
                 msg_id = await send_message(self.chat_id, self.prefix + slices[i], reply_to)
                 self.replied_msgs.append((msg_id, slices[i]))
-                pending_reply_manager.add((self.chat_id, msg_id))
+                # pending_reply_manager.add((self.chat_id, msg_id))
         if len(self.replied_msgs) > len(slices):
             for i in range(len(slices), len(self.replied_msgs)):
                 msg_id, _ = self.replied_msgs[i]
                 await delete_message(self.chat_id, msg_id)
-                pending_reply_manager.remove((self.chat_id, msg_id))
+                # pending_reply_manager.remove((self.chat_id, msg_id))
             self.replied_msgs = self.replied_msgs[:len(slices)]
 
     async def update(self, text):
@@ -1094,6 +1094,186 @@ async def seedream(message):
             await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
             return
 
+sora_usage = """Usage: /sora [OPTIONS] PROMPT
+
+Model:
+-2 --sora2 (default): Sora 2
+-p --sora2pro: Sora 2 Pro
+
+Size:
+-h --portrait (default): 720x1280
+-w --landscape: 1280x720
+-H --portrait-hd: 1024x1792
+-W --landscape-hd: 1792x1024
+
+Seconds:
+-4 (default): 4 seconds
+-8: 8 seconds
+-12 --12: 12 seconds
+
+Example:
+/sora -p -W -4 A cute cat
+
+Note: All OPTIONS should appear before the PROMPT.
+"""
+
+@only_whitelist
+async def sora(message):
+    chat_id = message.chat_id
+    sender_id = message.sender_id
+    msg_id = message.id
+    text = message.message
+    logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
+
+    photo_message = None
+    if message.is_reply:
+        reply_to_message = await message.get_reply_message()
+        if reply_to_message.photo is not None:
+            photo_message = reply_to_message
+    if message.photo is not None:
+        photo_message = message
+    photo_blobs = []
+    if photo_message is not None:
+        if photo_message.grouped_id is not None:
+            grouped_id = photo_message.grouped_id
+            await asyncio.sleep(3)
+            if grouped_id not in albums:
+                await send_message(chat_id, f'[!] Error: Historical photo album cannot be accessed by bot. Please forward or resend.', msg_id)
+                return
+            for msg in sorted(albums[grouped_id], key=lambda m: m.id):
+                photo_blobs.append(await msg.download_media(bytes))
+        else:
+            photo_blobs = [await photo_message.download_media(bytes)]
+    photo_hashes = []
+    if photo_blobs:
+        for photo_blob in photo_blobs:
+            photo_hashes.append(save_photo(photo_blob))
+        logging.info('Photos: chat_id=%r, sender_id=%r, msg_id=%r, photos(%r)=%r', chat_id, sender_id, msg_id, len(photo_hashes), photo_hashes)
+
+    if len(photo_hashes) > 1:
+        await send_message(chat_id, f'[!] Error: Only one photo is allowed for /sora command.', msg_id)
+        return
+
+    params = text.split()
+    prompt = []
+    model = None
+    size = None
+    seconds = None
+    error = None
+    is_options = True
+    for param in params[1:]:
+        if param.startswith('-') and is_options:
+            if param in ['-2', '--sora2']:
+                if model is None:
+                    model = 'sora-2'
+                else:
+                    error = 'More than one Model options found'
+            elif param in ['-p', '--sora2pro']:
+                if model is None:
+                    model = 'sora-2-pro'
+                else:
+                    error = 'More than one Model options found'
+            elif param in ['-h', '--portrait']:
+                if size is None:
+                    size = '720x1280'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-w', '--landscape']:
+                if size is None:
+                    size = '1280x720'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-H', '--portrait-hd']:
+                if size is None:
+                    size = '1024x1792'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-W', '--landscape-hd']:
+                if size is None:
+                    size = '1792x1024'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['-4']:
+                if seconds is None:
+                    seconds = 4
+                else:
+                    error = 'More than one Seconds options found'
+            elif param in ['-8']:
+                if seconds is None:
+                    seconds = 8
+                else:
+                    error = 'More than one Seconds options found'
+            elif param in ['-12', '--12']:
+                if seconds is None:
+                    seconds = 12
+                else:
+                    error = 'More than one Seconds options found'
+            else:
+                error = f'Unknown option: {param}'
+        else:
+            prompt.append(param)
+            is_options = False
+    if model is None:
+        model = 'sora-2'
+    if size is None:
+        size = '720x1280'
+    if seconds is None:
+        seconds = 4
+    prompt = ' '.join(prompt)
+    if not prompt:
+        error = 'Prompt is empty'
+    if error is not None:
+        await send_message(chat_id, f'[!] Error: {error}\n\n{sora_usage}', msg_id)
+        return
+
+    params = dict(
+        model=model,
+        prompt=prompt,
+        size=size,
+        seconds=str(seconds),
+    )
+    logging.info('Using sora API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+
+    async with bot.action(chat_id, 'typing'):
+        try:
+            if photo_hashes:
+                with open(load_photo_filename(photo_hashes[0]), 'rb') as f:
+                    params['input_reference'] = f
+                    video = await aclient.videos.create(**params)
+            else:
+                video = await aclient.videos.create(**params)
+            logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, video)
+
+            async with BotReplyMessages(chat_id, msg_id, f'[{model}] ') as replymsgs:
+                while video.status in ["in_progress", "queued"]:
+                    video = await aclient.videos.retrieve(video.id)
+                    logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, video)
+                    status_text = "Queued" if video.status == "queued" else "Processing"
+                    if video.progress is not None:
+                        status_text += f" {video.progress / 100:.1%}"
+                    await replymsgs.update(status_text)
+                    await asyncio.sleep(2)
+
+                if video.status == "failed":
+                    message = getattr(getattr(video, "error", None), "message", "Video generation failed")
+                    await replymsgs.update(f'[!] Error: {message}')
+                    return
+
+                dirname = f'images/{chat_id}'.replace('-', '_')
+                filename = f'sora_{int(time.time())}_{msg_id}.mp4'
+                path = f'{dirname}/{filename}'
+                os.makedirs(dirname, exist_ok=True)
+                content = await aclient.videos.download_content(video.id, variant="video")
+                content.write_to_file(path)
+                result_msg_id = await send_photo(chat_id, f'[{model}] {prompt}', msg_id, path)
+                db[repr((chat_id, result_msg_id))] = video.id
+                await replymsgs.update("Done")
+
+        except Exception as e:
+            logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
+            await send_message(chat_id, f'[!] Error: {traceback.format_exception_only(e)[-1].strip()}', msg_id)
+            return
+
 async def ping(message):
     await send_message(message.chat_id, f'chat_id={message.chat_id} user_id={message.sender_id} is_whitelisted={is_whitelist(message.chat_id)}', message.id)
 
@@ -1153,15 +1333,22 @@ async def main():
                 elif text == '/seed' or text.startswith('/seed ') or \
                     text == f'/seed@{me.username}' or text.startswith(f'/seed@{me.username} '):
                     await seedream(event.message)
+                elif text == '/sora' or text.startswith('/sora ') or \
+                    text == f'/sora@{me.username}' or text.startswith(f'/sora@{me.username} '):
+                    await sora(event.message)
                 elif text == '/add_whitelist' or text == f'/add_whitelist@{me.username}':
                     await add_whitelist_handler(event.message)
                 elif text == '/del_whitelist' or text == f'/del_whitelist@{me.username}':
                     await del_whitelist_handler(event.message)
                 elif text == '/get_whitelist' or text == f'/get_whitelist@{me.username}':
                     await get_whitelist_handler(event.message)
-            assert await bot(functions.bots.SetBotCommandsRequest(
+            assert await bot(functions.bots.ResetBotCommandsRequest(
                 scope=types.BotCommandScopeDefault(),
                 lang_code='en',
+            ))
+            assert await bot(functions.bots.SetBotCommandsRequest(
+                scope=types.BotCommandScopeDefault(),
+                lang_code='',
                 commands=[types.BotCommand(command, description) for command, description in [
                     ('ping', 'Test bot connectivity'),
                     ('add_whitelist', 'Add this group to whitelist (only admin)'),
@@ -1173,6 +1360,7 @@ async def main():
                     ('qwen', 'Creates an image given a prompt via qwen-image'),
                     ('imagen', 'Creates an image given a prompt via Imagen'),
                     ('seed', 'Creates an image given a prompt via Seedream'),
+                    ('sora', 'Creates a video given a prompt via Sora'),
                 ]]
             ))
             await bot.run_until_disconnected()
