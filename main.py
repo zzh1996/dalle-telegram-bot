@@ -1259,8 +1259,20 @@ async def sora(message):
             logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, video)
 
             async with BotReplyMessages(chat_id, msg_id, f'[{model}] ') as replymsgs:
+                retry_count = 0
                 while video.status in ["in_progress", "queued"]:
-                    video = await aclient.videos.retrieve(video.id)
+                    try:
+                        video = await aclient.videos.retrieve(video.id)
+                        retry_count = 0
+                    except Exception as e:
+                        logging.exception('Video retrieval error (chat_id=%r, msg_id=%r)', chat_id, msg_id)
+                        retry_count += 1
+                        if retry_count >= 10:
+                            await send_message(chat_id, f'[!] Error: Video retrieval failed after 10 attempts', msg_id)
+                            return
+                        await asyncio.sleep(2)
+                        continue
+
                     logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, video)
                     status_text = "Queued" if video.status == "queued" else "Processing"
                     if video.progress is not None:
@@ -1279,8 +1291,7 @@ async def sora(message):
                 os.makedirs(dirname, exist_ok=True)
                 content = await aclient.videos.download_content(video.id, variant="video")
                 content.write_to_file(path)
-                result_msg_id = await send_photo(chat_id, f'[{model}] {prompt}', msg_id, path)
-                db[repr((chat_id, result_msg_id))] = video.id
+
                 if model == 'sora-2':
                     price_per_second = 0.1
                 elif size in ['720x1280', '1280x720']:
@@ -1288,7 +1299,14 @@ async def sora(message):
                 else:
                     price_per_second = 0.5
                 cost = price_per_second * seconds
-                await replymsgs.update(f"Completed\nVideo ID: {video.id}\nSize: {size}\nSeconds: {seconds}\nCost: ${cost:.2f}")
+                caption = f'[{model}] {prompt}\n\nSize: {size}\nSeconds: {seconds}\nCost: ${cost:.2f}'
+                try:
+                    result_msg_id = await send_photo(chat_id, caption, msg_id, path)
+                except errors.rpcerrorlist.MediaCaptionTooLongError:
+                    result_msg_id = await send_photo(chat_id, '', msg_id, path)
+                    await send_message(chat_id, caption, result_msg_id)
+                db[repr((chat_id, result_msg_id))] = video.id
+                await replymsgs.update(f"Completed")
 
         except Exception as e:
             logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
