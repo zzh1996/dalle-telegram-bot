@@ -1281,7 +1281,14 @@ async def sora(message):
                 content.write_to_file(path)
                 result_msg_id = await send_photo(chat_id, f'[{model}] {prompt}', msg_id, path)
                 db[repr((chat_id, result_msg_id))] = video.id
-                await replymsgs.update(f"Completed\nVideo ID: {video.id}\nSize: {size}\nSeconds: {seconds}")
+                if model == 'sora-2':
+                    price_per_second = 0.1
+                elif size in ['720x1280', '1280x720']:
+                    price_per_second = 0.3
+                else:
+                    price_per_second = 0.5
+                cost = price_per_second * seconds
+                await replymsgs.update(f"Completed\nVideo ID: {video.id}\nSize: {size}\nSeconds: {seconds}\nCost: ${cost:.2f}")
 
         except Exception as e:
             logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
