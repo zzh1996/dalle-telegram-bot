@@ -1126,8 +1126,11 @@ async def sora(message):
     logging.info('New message: chat_id=%r, sender_id=%r, msg_id=%r, text=%r', chat_id, sender_id, msg_id, text)
 
     photo_message = None
+    remix_video_id = None
     if message.is_reply:
         reply_to_message = await message.get_reply_message()
+        if repr((chat_id, reply_to_message.id)) in db:
+            remix_video_id = db[repr((chat_id, reply_to_message.id))]
         if reply_to_message.photo is not None:
             photo_message = reply_to_message
     if message.photo is not None:
@@ -1213,6 +1216,15 @@ async def sora(message):
         else:
             prompt.append(param)
             is_options = False
+    if remix_video_id is not None:
+        if model is not None:
+            error = 'Model option is not allowed when remixing video'
+        if size is not None:
+            error = 'Size option is not allowed when remixing video'
+        if seconds is not None:
+            error = 'Seconds option is not allowed when remixing video'
+        if photo_hashes:
+            error = 'Photo is not allowed when remixing video'
     if model is None:
         model = 'sora-2'
     if size is None:
@@ -1236,7 +1248,9 @@ async def sora(message):
 
     async with bot.action(chat_id, 'typing'):
         try:
-            if photo_hashes:
+            if remix_video_id is not None:
+                video = await aclient.videos.remix(video_id=remix_video_id, prompt=prompt)
+            elif photo_hashes:
                 with open(load_photo_filename(photo_hashes[0]), 'rb') as f:
                     params['input_reference'] = f
                     video = await aclient.videos.create(**params)
@@ -1267,7 +1281,7 @@ async def sora(message):
                 content.write_to_file(path)
                 result_msg_id = await send_photo(chat_id, f'[{model}] {prompt}', msg_id, path)
                 db[repr((chat_id, result_msg_id))] = video.id
-                await replymsgs.update("Done")
+                await replymsgs.update(f"Completed\nVideo ID: {video.id}\nSize: {size}\nSeconds: {seconds}")
 
         except Exception as e:
             logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
