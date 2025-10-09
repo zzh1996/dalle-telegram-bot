@@ -1259,17 +1259,12 @@ async def sora(message):
             logging.info('Response: chat_id=%r, sender_id=%r, msg_id=%r, result=%s', chat_id, sender_id, msg_id, video)
 
             async with BotReplyMessages(chat_id, msg_id, f'[{model}] ') as replymsgs:
-                retry_count = 0
+                start_time = time.time()
                 while video.status in ["in_progress", "queued"]:
                     try:
                         video = await aclient.videos.retrieve(video.id)
-                        retry_count = 0
                     except Exception as e:
                         logging.exception('Video retrieval error (chat_id=%r, msg_id=%r)', chat_id, msg_id)
-                        retry_count += 1
-                        if retry_count >= 10:
-                            await send_message(chat_id, f'[!] Error: Video retrieval failed after 10 attempts', msg_id)
-                            return
                         await asyncio.sleep(2)
                         continue
 
@@ -1279,6 +1274,9 @@ async def sora(message):
                         status_text += f" {video.progress / 100:.1%}"
                     await replymsgs.update(status_text)
                     await asyncio.sleep(2)
+                    if time.time() - start_time > 3600:
+                        await replymsgs.update('[!] Error: Timed out after 1 hour')
+                        return
 
                 if video.status == "failed":
                     message = getattr(getattr(video, "error", None), "message", "Video generation failed")
