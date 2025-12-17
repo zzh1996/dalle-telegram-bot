@@ -515,14 +515,14 @@ async def gpti(message):
         return
 
     params = dict(
-        model='gpt-image-1',
+        model='gpt-image-1.5',
         prompt=prompt,
         background=background,
         moderation='low',
         quality=quality,
         size=size,
     )
-    logging.info('Using gpt-image-1 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    logging.info('Using gpt-image-1.5 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
     def remove_blob(result):
         result_ = result.model_copy(deep=True)
         if hasattr(result_, 'data'):
@@ -547,8 +547,8 @@ async def gpti(message):
             image_tokens = result.usage.input_tokens_details.image_tokens
             text_tokens = result.usage.input_tokens_details.text_tokens
             output_tokens = result.usage.output_tokens
-            cost = 5e-6 * text_tokens + 10e-6 * image_tokens + 40e-6 * output_tokens
-            usage_text = '[gpt-image-1]\n'
+            cost = 5e-6 * text_tokens + 8e-6 * image_tokens + 32e-6 * output_tokens
+            usage_text = '[gpt-image-1.5]\n'
             if photo_hashes:
                 usage_text += f'Input images: {len(photo_hashes)}\n'
             if input_tokens:
@@ -1392,7 +1392,7 @@ async def main():
                     ('del_whitelist', 'Delete this group from whitelist (only admin)'),
                     ('get_whitelist', 'List groups in whitelist (only admin)'),
                     ('dalle', 'Creates an image given a prompt via DALL-E'),
-                    ('gpti', 'Creates an image given a prompt via gpt-image-1'),
+                    ('gpti', 'Creates an image given a prompt via gpt-image-1.5'),
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
                     ('qwen', 'Creates an image given a prompt via qwen-image'),
                     ('imagen', 'Creates an image given a prompt via Imagen'),
