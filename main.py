@@ -1043,9 +1043,9 @@ async def seedream(message):
         return
 
     params = dict(
-        model='doubao-seedream-4-0-250828',
+        model='doubao-seedream-5-0-260128',
         prompt=prompt,
-        size='4K',
+        size='3K',
         response_format='b64_json',
         stream=True,
         extra_body={
@@ -1087,7 +1087,7 @@ async def seedream(message):
                         os.makedirs(dirname, exist_ok=True)
                         with open(path, 'w+b') as f:
                             f.write(image_bytes)
-                        caption = f'[doubao-seedream-4-0-250828]\nimage_index={event.image_index}\nsize={event.size}'
+                        caption = f'[doubao-seedream-5-0-260128]\nimage_index={event.image_index}\nsize={event.size}'
                         reply_to_message_id = await send_photo(chat_id, caption, reply_to_message_id, path)
         except Exception as e:
             logging.exception('Error (chat_id=%r, msg_id=%r): %s', chat_id, msg_id, e)
