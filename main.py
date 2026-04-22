@@ -400,10 +400,13 @@ default: auto
 -s --square: 1024x1024
 -w --landscape: 1536x1024
 -p --portrait: 1024x1536
+--2k-square: 2048x2048
+--2k-landscape: 2048x1152
+--4k-landscape: 3840x2160
+--4k-portrait: 2160x3840
 
 Background:
 default: auto
--t --transparent: transparent
 -o --opaque: opaque
 
 Example:
@@ -484,11 +487,26 @@ async def gpti(message):
                     size = '1024x1536'
                 else:
                     error = 'More than one Size options found'
-            elif param in ['-t', '--transparent']:
-                if background is None:
-                    background = 'transparent'
+            elif param in ['--2k-square']:
+                if size is None:
+                    size = '2048x2048'
                 else:
-                    error = 'More than one Background options found'
+                    error = 'More than one Size options found'
+            elif param in ['--2k-landscape']:
+                if size is None:
+                    size = '2048x1152'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--4k-landscape']:
+                if size is None:
+                    size = '3840x2160'
+                else:
+                    error = 'More than one Size options found'
+            elif param in ['--4k-portrait']:
+                if size is None:
+                    size = '2160x3840'
+                else:
+                    error = 'More than one Size options found'
             elif param in ['-o', '--opaque']:
                 if background is None:
                     background = 'opaque'
@@ -515,14 +533,14 @@ async def gpti(message):
         return
 
     params = dict(
-        model='gpt-image-1.5',
+        model='gpt-image-2',
         prompt=prompt,
         background=background,
         moderation='low',
         quality=quality,
         size=size,
     )
-    logging.info('Using gpt-image-1.5 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
+    logging.info('Using gpt-image-2 API: chat_id=%r, sender_id=%r, msg_id=%r, params=%s', chat_id, sender_id, msg_id, params)
     def remove_blob(result):
         result_ = result.model_copy(deep=True)
         if hasattr(result_, 'data'):
@@ -547,8 +565,8 @@ async def gpti(message):
             image_tokens = result.usage.input_tokens_details.image_tokens
             text_tokens = result.usage.input_tokens_details.text_tokens
             output_tokens = result.usage.output_tokens
-            cost = 5e-6 * text_tokens + 8e-6 * image_tokens + 32e-6 * output_tokens
-            usage_text = '[gpt-image-1.5]\n'
+            cost = 5e-6 * text_tokens + 8e-6 * image_tokens + 30e-6 * output_tokens
+            usage_text = '[gpt-image-2]\n'
             if photo_hashes:
                 usage_text += f'Input images: {len(photo_hashes)}\n'
             if input_tokens:
@@ -1392,7 +1410,7 @@ async def main():
                     ('del_whitelist', 'Delete this group from whitelist (only admin)'),
                     ('get_whitelist', 'List groups in whitelist (only admin)'),
                     ('dalle', 'Creates an image given a prompt via DALL-E'),
-                    ('gpti', 'Creates an image given a prompt via gpt-image-1.5'),
+                    ('gpti', 'Creates an image given a prompt via gpt-image-2'),
                     ('flux', 'Creates an image given a prompt via FLUX.1'),
                     ('qwen', 'Creates an image given a prompt via qwen-image'),
                     ('imagen', 'Creates an image given a prompt via Imagen'),
