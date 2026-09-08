@@ -390,10 +390,17 @@ async def dalle(message):
 
 gpti_usage = """Usage: /gpti [OPTIONS] PROMPT
 
+Model:
+--sunburst (default): gpt-image-2.5-sunburst
+--flare: gpt-image-2.5-flare
+
 Quality:
--h --high (default): high
--m --medium: medium
--l --low: low
+default: auto
+--max: max
+--xhigh: xhigh
+--high: high
+--medium: medium
+--low: low
 
 Size:
 default: auto
@@ -410,7 +417,7 @@ default: auto
 -o --opaque: opaque
 
 Example:
-/gpti -h -s -o A cute cat
+/gpti --max -s -o A cute cat
 
 Note: All OPTIONS should appear before the PROMPT.
 """
@@ -450,6 +457,7 @@ async def gpti(message):
 
     params = text.split()
     prompt = []
+    model = None
     quality = None
     size = None
     background = None
@@ -457,17 +465,37 @@ async def gpti(message):
     is_options = True
     for param in params[1:]:
         if param.startswith('-') and is_options:
-            if param in ['-h', '--high']:
+            if param == '--sunburst':
+                if model is None:
+                    model = 'gpt-image-2.5-sunburst'
+                else:
+                    error = 'More than one Model options found'
+            elif param == '--flare':
+                if model is None:
+                    model = 'gpt-image-2.5-flare'
+                else:
+                    error = 'More than one Model options found'
+            elif param == '--max':
+                if quality is None:
+                    quality = 'max'
+                else:
+                    error = 'More than one Quality options found'
+            elif param == '--xhigh':
+                if quality is None:
+                    quality = 'xhigh'
+                else:
+                    error = 'More than one Quality options found'
+            elif param == '--high':
                 if quality is None:
                     quality = 'high'
                 else:
                     error = 'More than one Quality options found'
-            elif param in ['-m', '--medium']:
+            elif param == '--medium':
                 if quality is None:
                     quality = 'medium'
                 else:
                     error = 'More than one Quality options found'
-            elif param in ['-l', '--low']:
+            elif param == '--low':
                 if quality is None:
                     quality = 'low'
                 else:
@@ -517,8 +545,10 @@ async def gpti(message):
         else:
             prompt.append(param)
             is_options = False
+    if model is None:
+        model = 'gpt-image-2.5-sunburst'
     if quality is None:
-        quality = 'high'
+        quality = 'auto'
     if size is None:
         size = 'auto'
     if photo_blobs and background is not None:
@@ -533,7 +563,7 @@ async def gpti(message):
         return
 
     params = dict(
-        model='gpt-image-2',
+        model=model,
         prompt=prompt,
         background=background,
         moderation='low',
@@ -566,7 +596,10 @@ async def gpti(message):
             text_tokens = result.usage.input_tokens_details.text_tokens
             output_tokens = result.usage.output_tokens
             cost = 5e-6 * text_tokens + 8e-6 * image_tokens + 30e-6 * output_tokens
-            usage_text = '[gpt-image-2]\n'
+            usage_text = f'[{model}]\n'
+            usage_text += f'Background: {result.background}\n'
+            usage_text += f'Quality: {result.quality}\n'
+            usage_text += f'Size: {result.size}\n'
             if photo_hashes:
                 usage_text += f'Input images: {len(photo_hashes)}\n'
             if input_tokens:
